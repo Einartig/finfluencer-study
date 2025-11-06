@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Investment-Studie</title>
+  <style>
+    :root { --pad: 16px; }
+    body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; max-width: 900px; margin: 24px auto; padding: 0 12px; line-height: 1.55; }
+    h1, h2, h3 { line-height: 1.2; }
+    .card { border: 1px solid #e5e7eb; border-radius: 14px; padding: var(--pad); margin: 18px 0; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+    .btn { padding: 10px 16px; border-radius: 10px; border: 1px solid #d1d5db; background:#fff; cursor:pointer; }
+    .btn.primary { background:#111827; color:#fff; border-color:#111827; }
+    .grid3 { display:grid; grid-template-columns: 1fr 1fr 1fr; gap:12px; }
+    .row { display:flex; flex-wrap:wrap; gap:12px; align-items: center; }
+    label { font-weight: 600; margin: 8px 0 4px; display:block; }
+    input[type=number], select { padding:8px 10px; border-radius:10px; border:1px solid #d1d5db; }
+    .warn { color:#b91c1c; font-weight:600; }
+    .muted { color:#6b7280; }
+    .small { font-size:.9rem; }
+    .stim { display:flex; gap:14px; align-items:flex-start; }
+    .stim img, .stim video { max-width: 320px; border-radius: 10px; border:1px solid #e5e7eb; }
+  </style>
+  <!-- Firebase v9 compat (CDN) -->
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+  <script src="config.js"></script> <!-- <- du erstellst diese Datei aus config.sample.js -->
+</head>
+<body>
+  <h1>Studie zu Investment-Entscheidungen</h1>
+
+  <div class="card" id="consent">
+    <p>Diese wissenschaftliche Studie untersucht, wie unterschiedliche Informationsquellen Investmententscheidungen beeinflussen.
+      Alle Inhalte sind zu Forschungszwecken erstellt. <b>Keine Anlageempfehlung.</b></p>
+    <label><input type="checkbox" id="agree"> Ich habe die Hinweise gelesen und stimme der freiwilligen Teilnahme zu.</label>
+    <button class="btn primary" id="startBtn">Start</button>
+  </div>
+
+  <div class="card" id="stimuli" style="display:none">
+    <h2>Informationen</h2>
+    <div id="stimulusWrap"></div>
+  </div>
+
+  <div class="card" id="task" style="display:none">
+    <h2>Ihre Aufgabe</h2>
+    <p>Verteilen Sie <b>10.000 €</b> auf <b>Aktie A</b>, <b>Aktie B</b> und <b>Cash</b>. Die <b>Summe muss 10.000</b> ergeben.</p>
+    <div class="grid3">
+      <div><label>Aktie A (€)</label><input type="number" id="a" min="0" step="50" value="0"></div>
+      <div><label>Aktie B (€)</label><input type="number" id="b" min="0" step="50" value="0"></div>
+      <div><label>Cash (€)</label><input type="number" id="c" min="0" step="50" value="0"></div>
+    </div>
+    <label style="margin-top:12px;">Wie sicher sind Sie in Ihrer Entscheidung? (0–100)</label>
+    <input type="number" id="confidence" min="0" max="100" value="50">
+  </div>
+
+  <div class="card" id="questions" style="display:none">
+    <h2>Kurze Fragen</h2>
+    <div class="grid3">
+      <div>
+        <label>Welche Quelle fanden Sie glaubwürdiger?<br><span class="muted small">(1=Legacy, 7=Finfluencer)</span></label>
+        <input type="number" id="credSource" min="1" max="7" value="4">
+      </div>
+      <div>
+        <label>Social-Media-Finanzcontent – Nutzungshäufigkeit (1–7)</label>
+        <input type="number" id="smUse" min="1" max="7" value="4">
+      </div>
+      <div>
+        <label>Finanzwissen (Selbsteinschätzung 1–7)</label>
+        <input type="number" id="lit" min="1" max="7" value="4">
+      </div>
+    </div>
+
+    <div class="grid3">
+      <div>
+        <label>Familiarität: Diana zur Löwen (0–7)</label>
+        <input type="number" id="famDiana" min="0" max="7" value="3">
+      </div>
+      <div>
+        <label>Familiarität: Finanzfluss (0–7)</label>
+        <input type="number" id="famFinanzfluss" min="0" max="7" value="3">
+      </div>
+      <div>
+        <label>Manipulation Check: Wer empfahl Aktie A?</label>
+        <select id="mcA">
+          <option value="">Bitte wählen</option>
+          <option>Legacy</option>
+          <option>Finfluencer</option>
+          <option>Keine Empfehlung</option>
+        </select>
+      </div>
+    </div>
+    <div style="margin-top:12px;">
+      <button class="btn primary" id="submitBtn">Abschicken</button>
+      <span id="sumWarn" class="warn"></span>
+    </div>
+  </div>
+
+  <div class="card" id="done" style="display:none">
+    <h2>Vielen Dank!</h2>
+    <p>Ihre Antworten wurden gespeichert.</p>
+    <p class="small muted">Hinweis: Diese Studie diente ausschließlich Forschungszwecken. Es handelte sich nicht um Anlageempfehlungen.</p>
+  </div>
+
+<script>
+// --- Firebase Init ---
+const app = firebase.initializeApp(window.__FIREBASE_CONFIG__);
+const db  = firebase.firestore(app);
+
+// --- Bedingungen (3) ---
+const CONDITIONS = [
+  { key:'legacy_pro', legacy:'pro_A', fin:null },
+  { key:'fin_pro',    legacy:null,   fin:'pro_A' },
+  { key:'conflict',   legacy:'pro_A', fin:'contra_A' }
+];
+
+// --- Stimuli: Texte/Medien (passe an) ---
+const STIM = {
+  legacy: {
+    pro_A: {
+      title: "Wirtschaftsmedium: Empfehlung Aktie A",
+      text: "Analysten verweisen auf stabile Ertragslage, positives Branchenumfeld und attraktive Bewertung.",
+      img:  "assets/legacy.jpg",
+      video: "assets/legacy.mp4" // optional
+    }
+  },
+  fin: {
+    pro_A: {
+      title: "Finfluencer: Empfehlung Aktie A",
+      text: "Kurzvideo erklärt bullishe Argumente (Wachstumstreiber, Story).",
+      img:  "assets/influencer.jpg",
+      video: "assets/influencer_proA.mp4"
+    },
+    contra_A: {
+      title: "Finfluencer: Gegenposition zu Aktie A (pro B)",
+      text: "Kurzvideo betont Risiken bei A und hebt B als Alternative hervor.",
+      img:  "assets/influencer.jpg",
+      video: "assets/influencer_contraA.mp4"
+    }
+  }
+};
+
+let cond = null, t0 = null;
+
+function randCondition(){
+  const qs = new URLSearchParams(location.search);
+  const urlCond = qs.get('cond');
+  if (urlCond && CONDITIONS.find(c=>c.key===urlCond)) return CONDITIONS.find(c=>c.key===urlCond);
+  return CONDITIONS[Math.floor(Math.random() * CONDITIONS.length)];
+}
+
+function mediaBlock(title, text, imgSrc, videoSrc){
+  const hasVideo = !!videoSrc;
+  return `
+    <div class="card">
+      <h3>${title}</h3>
+      <div class="stim">
+        ${hasVideo ? `<video controls preload="metadata" src="${videoSrc}"></video>` : `<img src="${imgSrc}" alt="">`}
+        <p>${text}</p>
+      </div>
+    </div>
+  `;
+}
+
+function renderStimuli(){
+  const wrap = document.getElementById('stimulusWrap');
+  const blocks = [];
+  if (cond.legacy){
+    const s = STIM.legacy[cond.legacy];
+    blocks.push(mediaBlock(s.title, s.text, s.img, s.video));
+  }
+  if (cond.fin){
+    const s = STIM.fin[cond.fin];
+    blocks.push(mediaBlock(s.title, s.text, s.img, s.video));
+  }
+  // Reihenfolge mischen, wenn beide vorhanden
+  for (let i = blocks.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [blocks[i], blocks[j]] = [blocks[j], blocks[i]];
+  }
+  wrap.innerHTML = blocks.join("");
+}
+
+function sumOK(){
+  const a = +document.getElementById('a').value || 0;
+  const b = +document.getElementById('b').value || 0;
+  const c = +document.getElementById('c').value || 0;
+  return a + b + c === 10000;
+}
+
+document.getElementById('startBtn').onclick = ()=>{
+  if (!document.getElementById('agree').checked){
+    alert('Bitte Einwilligung bestätigen.');
+    return;
+  }
+  cond = randCondition();
+  t0 = Date.now();
+  document.getElementById('consent').style.display='none';
+  renderStimuli();
+  document.getElementById('stimuli').style.display='block';
+  document.getElementById('task').style.display='block';
+  document.getElementById('questions').style.display='block';
+};
+
+document.getElementById('submitBtn').onclick = async ()=>{
+  const warn = document.getElementById('sumWarn');
+  warn.textContent = '';
+  if (!sumOK()){ warn.textContent = 'Die Summe muss 10.000 € ergeben.'; return; }
+
+  const payload = {
+    id: `${Date.now()}_${Math.random().toString(36).slice(2)}`,
+    condition: cond.key,
+    a: +document.getElementById('a').value || 0,
+    b: +document.getElementById('b').value || 0,
+    c: +document.getElementById('c').value || 0,
+    confidence: +document.getElementById('confidence').value || null,
+    credSource: +document.getElementById('credSource').value || null,
+    smUse: +document.getElementById('smUse').value || null,
+    lit: +document.getElementById('lit').value || null,
+    famDiana: +document.getElementById('famDiana').value || null,
+    famFinanzfluss: +document.getElementById('famFinanzfluss').value || null,
+    mcA: document.getElementById('mcA').value || null,
+    userAgent: navigator.userAgent,
+    ts: new Date().toISOString(),
+    ms_on_task: Date.now()-t0
+  };
+
+  try{
+    await db.collection('responses').doc(payload.id).set(payload);
+    document.getElementById('stimuli').style.display='none';
+    document.getElementById('task').style.display='none';
+    document.getElementById('questions').style.display='none';
+    document.getElementById('done').style.display='block';
+  } catch (e){
+    console.error(e);
+    alert('Fehler beim Speichern. Bitte später erneut versuchen.');
+  }
+};
+</script>
+</body>
+</html>
